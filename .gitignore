@@ -1,0 +1,21 @@
+# Secret & sensitive files
+**/.env
+**/*.env
+**/.env.*
+
+# Markdown documentation (kecuali README.md)
+**/*.md
+!README.md
+
+# Docker build artifacts
+**/Dockerfile
+**/*.tar
+**/*.tar.gz
+
+# Mount folders lokal
+**/laravel/
+**/nginx/
+**/media/
+**/custom-templates/
+**/logstash/
+**/filebeat/

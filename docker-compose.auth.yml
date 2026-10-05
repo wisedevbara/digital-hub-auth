@@ -1,5 +1,3 @@
-version: "3.9"
-
 networks:
   digital-hub-net:
     name: digital-hub-net
@@ -10,6 +8,7 @@ services:
     image: ghcr.io/goauthentik/server:2026.8.3
     container_name: authentik_server
     restart: unless-stopped
+    command: ["server"]
     networks:
       - digital-hub-net
     env_file:
@@ -18,18 +17,74 @@ services:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
       AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__PORT: "5432"
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__CONN_MAX_AGE: "300"
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_REDIS__PORT: "6379"
+      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD}
+      # The custom Vue UI is served from a different origin than the IdP, so
+      # Django must trust it for CSRF/CORS when the SPA drives the flows.
+      AUTHENTIK_CORS_ALLOWED_ORIGINS: "http://localhost:8080,http://localhost:8081"
+      AUTHENTIK_CSRF_TRUSTED_ORIGINS: "http://localhost:8080,http://localhost:8081,http://localhost:9000,http://localhost:9001"
+      # Store the CSRF token in the session instead of a separate cookie. The
+      # custom SPA drives the flow executor API through a proxy, so a separate
+      # authentik_csrf cookie is never returned with the follow-up request.
+      AUTHENTIK_CSRF_USE_SESSIONS: "true"
+      AUTHENTIK_COOKIE_DOMAIN: localhost
     ports:
       - "9001:9000"
     volumes:
       - ./media:/media
       - ./custom-templates:/templates
+      - ./blueprints:/blueprints/custom
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    image: ghcr.io/goauthentik/server:2026.8.3
+    container_name: authentik_worker
+    restart: unless-stopped
+    command: ["worker"]
+    networks:
+      - digital-hub-net
+    env_file:
+      - .env
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__PORT: "5432"
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_REDIS__PORT: "6379"
+      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD}
+      # Worker must accept the same client-IP/origin config as the server.
+      AUTHENTIK_CORS_ALLOWED_ORIGINS: "http://localhost:8080,http://localhost:8081"
+      AUTHENTIK_CSRF_TRUSTED_ORIGINS: "http://localhost:8080,http://localhost:8081,http://localhost:9000,http://localhost:9001"
+      # Store the CSRF token in the session instead of a separate cookie. The
+      # custom SPA drives the flow executor API through a proxy, so a separate
+      # authentik_csrf cookie is never returned with the follow-up request.
+      AUTHENTIK_CSRF_USE_SESSIONS: "true"
+      AUTHENTIK_COOKIE_DOMAIN: localhost
+    depends_on:
+      - postgres
+      - redis
 
   postgres:
     image: postgres:16-alpine
     container_name: postgres_auth
     restart: unless-stopped
     networks:
-      - digital-hub-net
+      digital-hub-net:
+        aliases:
+          - postgres-auth
+          - postgres
     env_file:
       - .env
     ports:
@@ -46,7 +101,10 @@ services:
     container_name: redis_auth
     restart: unless-stopped
     networks:
-      - digital-hub-net
+      digital-hub-net:
+        aliases:
+          - redis-auth
+          - redis
     env_file:
       - .env
     ports:
@@ -54,6 +112,28 @@ services:
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
     volumes:
       - redis_app_data:/data
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: digital-hub-auth-web:latest
+    container_name: digital_hub_auth_web
+    restart: unless-stopped
+    networks:
+      - digital-hub-net
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      RUST_LOG: info
+      # Server-side proxy target (container network).
+      AUTHENTIK_URL: http://server:9000
+      # Browser-facing URL, used for Origin/Referer so Django CSRF passes.
+      AUTHENTIK_PUBLIC_URL: http://localhost:9001
+    ports:
+      - "8081:8080"
+    depends_on:
+      - server
 
 volumes:
   postgres_app_data:
