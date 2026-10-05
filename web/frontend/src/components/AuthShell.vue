@@ -1,9 +1,28 @@
 <script setup>
-// Shared shell for every IdP screen: centered card + brand header.
-defineProps({
+/**
+ * Shared shell for every IdP screen: centered card + brand header.
+ *
+ * Branding arrives as props from /api/config so one IdP can show a different
+ * name per client application without a rebuild.
+ */
+import { computed } from 'vue'
+
+const props = defineProps({
   title: { type: String, default: '' },
   subtitle: { type: String, default: '' },
+  brandName: { type: String, default: 'Digital Hub' },
+  clientName: { type: String, default: '' },
 })
+
+// Initials for the logo tile, so a per-client brand needs no image asset.
+const initials = computed(() =>
+  props.brandName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join(''),
+)
 </script>
 
 <template>
@@ -13,10 +32,13 @@ defineProps({
         <div
           class="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600 text-base font-bold text-white shadow-sm"
         >
-          DH
+          {{ initials || 'DH' }}
         </div>
-        <h1 class="mt-4 text-xl font-semibold text-slate-900">Digital Hub</h1>
+        <h1 class="mt-4 text-xl font-semibold text-slate-900">{{ brandName }}</h1>
         <p v-if="subtitle" class="mt-1 text-sm text-slate-500">{{ subtitle }}</p>
+        <p v-if="clientName" class="mt-1 text-xs text-slate-400">
+          untuk <span class="font-medium text-slate-500">{{ clientName }}</span>
+        </p>
       </div>
 
       <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">

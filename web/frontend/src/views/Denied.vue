@@ -8,7 +8,13 @@ import AuthShell from '../components/AuthShell.vue'
 const props = defineProps({
   error: { type: String, default: '' },
   errorDescription: { type: String, default: '' },
+  brandName: { type: String, default: 'Digital Hub' },
+  clientName: { type: String, default: '' },
 })
+
+// The parent decides where "Kembali" goes (the configured start URL for this
+// client), so this view stays free of any app-specific route.
+const emit = defineEmits(['retry'])
 
 const heading = computed(() =>
   props.error === 'access_denied'
@@ -18,7 +24,7 @@ const heading = computed(() =>
 </script>
 
 <template>
-  <AuthShell>
+  <AuthShell :brand-name="props.brandName" :client-name="props.clientName">
     <div class="flex flex-col items-center text-center">
       <div
         class="flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 text-rose-600 ring-1 ring-inset ring-rose-600/20"
@@ -38,12 +44,13 @@ const heading = computed(() =>
         error: {{ error }}
       </p>
 
-      <a
-        href="/"
-        class="mt-6 inline-block rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
+      <button
+        type="button"
+        @click="emit('retry')"
+        class="mt-6 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
       >
         Kembali
-      </a>
+      </button>
     </div>
   </AuthShell>
 </template>

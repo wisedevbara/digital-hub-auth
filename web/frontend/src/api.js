@@ -42,7 +42,46 @@ async function request(path, options = {}) {
 }
 
 // NOTE: API already includes "/idp/api", so these paths must not repeat "/api".
-export const getConfig = () => request('/config')
+//
+// The IdP serves many client apps (Laravel today, Next.js later). Everything the
+// SPA needs to know about "which app is asking" comes from /config, resolved by
+// client_id - nothing about a specific client is baked into this file.
+export function getConfig(clientId) {
+  const qs = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
+  return request(`/config${qs}`)
+}
+
+/**
+ * Key the stored authorize query per client.
+ *
+ * With several apps on one IdP, a single shared key would let app B's
+ * authorize request be resumed by app A's page. The client_id is the only
+ * reliable discriminator, so it goes in the key.
+ */
+function queryKey(clientId) {
+  return `dh:authorize_query:${clientId || 'anonymous'}`
+}
+
+function saveAuthorizeQuery(clientId, query) {
+  try {
+    sessionStorage.setItem(queryKey(clientId), query)
+  } catch {
+    // Private mode / storage disabled: the URL still carries the query, so the
+    // only loss is the refresh fallback.
+  }
+}
+
+function loadAuthorizeQuery(clientId) {
+  try {
+    return sessionStorage.getItem(queryKey(clientId))
+  } catch {
+    return null
+  }
+}
+
+function readClientId() {
+  return new URLSearchParams(window.location.search).get('client_id')
+}
 
 /**
  * Ask the IdP where /authorize would send the browser, so we know whether to
@@ -74,14 +113,24 @@ export function parseFlowSlug(location) {
 }
 
 /**
- * Recover the authorize query from the Laravel app.
+ * Recover the authorize query when the URL no longer carries it (refresh, or
+ * the SPA opened directly).
  *
- * The SPA can lose the query on refresh or when opened directly. Laravel
- * keeps the same query in the session, so ask it for a fresh copy. Both are
- * now same-origin (nginx serves the SPA under /idp), so a relative URL is
- * enough and the session cookie is sent normally.
+ * Order matters. The browser's own copy is authoritative and works for every
+ * client app on any origin - that is the multi-client answer. Laravel's
+ * /auth/authorize-query is only consulted when storage is unavailable AND the
+ * SPA happens to be same-origin with a Laravel app, so it stays as a last
+ * resort for the first client without becoming a hard dependency.
  */
-export async function fetchAuthorizeQueryFromServer() {
+export async function recoverAuthorizeQuery(clientId) {
+  const stored = loadAuthorizeQuery(clientId)
+  if (stored) return stored
+
+  return fetchAuthorizeQueryFromLaravel()
+}
+
+/** Legacy single-client fallback. Returns null when there is no Laravel app. */
+async function fetchAuthorizeQueryFromLaravel() {
   try {
     const res = await fetch('/auth/authorize-query', {
       credentials: 'same-origin',
@@ -96,3 +145,5 @@ export async function fetchAuthorizeQueryFromServer() {
     return null
   }
 }
+
+export { readClientId, saveAuthorizeQuery }

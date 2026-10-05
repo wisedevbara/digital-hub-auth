@@ -9,6 +9,8 @@ import { runFlow } from '../api'
 const props = defineProps({
   flowSlug: { type: String, default: 'dh-consent' },
   query: { type: String, default: '' },
+  brandName: { type: String, default: 'Digital Hub' },
+  clientName: { type: String, default: '' },
 })
 
 const emit = defineEmits(['done'])
@@ -19,9 +21,17 @@ const submitting = ref(false)
 const pageError = ref('')
 
 const permissions = computed(() => challenge.value?.permissions ?? [])
-const applicationName = computed(
-  () => challenge.value?.header_text?.replace(/^You'?re about to sign into\s*/i, '') ?? 'Digital Hub',
-)
+// The challenge's header_text names the application Authentik is authorizing.
+// When it is absent (or unrecognised), fall back to the registered client name
+// from /config rather than to a single hardcoded app.
+const applicationName = computed(() => {
+  const fromChallenge = challenge.value?.header_text?.replace(
+    /^You'?re about to sign into\s*/i,
+    '',
+  )
+  const name = fromChallenge?.trim()
+  return name || props.clientName || 'Aplikasi ini'
+})
 
 function errorMessages() {
   const out = []
@@ -71,7 +81,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <AuthShell subtitle="Permintaan otorisasi">
+  <AuthShell
+    subtitle="Permintaan otorisasi"
+    :brand-name="props.brandName"
+    :client-name="props.clientName"
+  >
     <div v-if="loading" class="py-8 text-center text-sm text-slate-500">Memuat…</div>
 
     <div v-else-if="pageError" class="rounded-lg border border-rose-200 bg-rose-50 p-4">

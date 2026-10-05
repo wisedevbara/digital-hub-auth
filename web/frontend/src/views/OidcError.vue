@@ -5,15 +5,21 @@
  */
 import AuthShell from '../components/AuthShell.vue'
 
-defineProps({
+const props = defineProps({
   error: { type: String, default: 'server_error' },
   errorDescription: { type: String, default: '' },
   detail: { type: String, default: '' },
+  brandName: { type: String, default: 'Digital Hub' },
+  clientName: { type: String, default: '' },
 })
+
+// The parent resolves the retry target from /config, so a second client app does
+// not need its own hardcoded link in this view.
+const emit = defineEmits(['retry'])
 </script>
 
 <template>
-  <AuthShell>
+  <AuthShell :brand-name="props.brandName" :client-name="props.clientName">
     <div class="flex flex-col items-center text-center">
       <div
         class="flex h-12 w-12 items-center justify-center rounded-full bg-amber-50 text-amber-600 ring-1 ring-inset ring-amber-600/20"
@@ -43,12 +49,13 @@ defineProps({
         </div>
       </div>
 
-      <a
-        href="/"
-        class="mt-6 inline-block rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
+      <button
+        type="button"
+        @click="emit('retry')"
+        class="mt-6 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
       >
         Coba lagi
-      </a>
+      </button>
     </div>
   </AuthShell>
 </template>

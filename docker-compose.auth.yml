@@ -17,19 +17,15 @@ services:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
       AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
-      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__HOST: postgres-auth
       AUTHENTIK_POSTGRESQL__PORT: "5432"
       AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
       AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
       AUTHENTIK_POSTGRESQL__CONN_MAX_AGE: "300"
-      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_REDIS__HOST: redis-auth
       AUTHENTIK_REDIS__PORT: "6379"
       AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD}
-      # The custom Vue UI is served from a different origin than the IdP, so
-      # Django must trust it for CSRF/CORS when the SPA drives the flows.
-      AUTHENTIK_CORS_ALLOWED_ORIGINS: "http://localhost:8080,http://localhost:8081"
-      AUTHENTIK_CSRF_TRUSTED_ORIGINS: "http://localhost:8080,http://localhost:8081,http://localhost:9000,http://localhost:9001"
       # Store the CSRF token in the session instead of a separate cookie. The
       # custom SPA drives the flow executor API through a proxy, so a separate
       # authentik_csrf cookie is never returned with the follow-up request.
@@ -42,8 +38,8 @@ services:
       - ./custom-templates:/templates
       - ./blueprints:/blueprints/custom
     depends_on:
-      - postgres
-      - redis
+      - postgres-auth
+      - redis-auth
 
   worker:
     image: ghcr.io/goauthentik/server:2026.8.3
@@ -56,27 +52,28 @@ services:
       - .env
     environment:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__HOST: postgres-auth
       AUTHENTIK_POSTGRESQL__PORT: "5432"
       AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
       AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
-      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_REDIS__HOST: redis-auth
       AUTHENTIK_REDIS__PORT: "6379"
       AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD}
-      # Worker must accept the same client-IP/origin config as the server.
-      AUTHENTIK_CORS_ALLOWED_ORIGINS: "http://localhost:8080,http://localhost:8081"
-      AUTHENTIK_CSRF_TRUSTED_ORIGINS: "http://localhost:8080,http://localhost:8081,http://localhost:9000,http://localhost:9001"
       # Store the CSRF token in the session instead of a separate cookie. The
       # custom SPA drives the flow executor API through a proxy, so a separate
       # authentik_csrf cookie is never returned with the follow-up request.
       AUTHENTIK_CSRF_USE_SESSIONS: "true"
       AUTHENTIK_COOKIE_DOMAIN: localhost
     depends_on:
-      - postgres
-      - redis
+      - postgres-auth
+      - redis-auth
 
-  postgres:
+  # Service names are unique per stack on purpose. docker-compose.app.yml runs on
+  # the same external network, and Docker derives a network alias from the
+  # service name - two services both named "postgres"/"redis" made those names
+  # resolve round-robin to whichever stack answered first.
+  postgres-auth:
     image: postgres:16-alpine
     container_name: postgres_auth
     restart: unless-stopped
@@ -84,7 +81,6 @@ services:
       digital-hub-net:
         aliases:
           - postgres-auth
-          - postgres
     env_file:
       - .env
     ports:
@@ -96,7 +92,7 @@ services:
     volumes:
       - postgres_app_data:/var/lib/postgresql/data
 
-  redis:
+  redis-auth:
     image: redis:8.2
     container_name: redis_auth
     restart: unless-stopped
@@ -104,7 +100,6 @@ services:
       digital-hub-net:
         aliases:
           - redis-auth
-          - redis
     env_file:
       - .env
     ports:
@@ -130,6 +125,26 @@ services:
       AUTHENTIK_URL: http://server:9000
       # Browser-facing URL, used for Origin/Referer so Django CSRF passes.
       AUTHENTIK_PUBLIC_URL: http://localhost:9001
+      # ------------------------------------------------------------------ #
+      # Multi-client IdP
+      #
+      # This service serves any number of client apps (Laravel, Next.js, ...).
+      # Nothing about a specific client is compiled in; everything below is
+      # configuration, so adding a provider needs a restart, never a rebuild.
+      # ------------------------------------------------------------------ #
+      # Flow slugs the custom UI is allowed to drive. A new provider may use its
+      # own flows; list them here or the SPA gets HTTP 400.
+      ALLOWED_FLOWS: "dh-login,dh-consent"
+      # Slugs used when the authorize redirect names none.
+      DEFAULT_LOGIN_FLOW: "dh-login"
+      DEFAULT_CONSENT_FLOW: "dh-consent"
+      # Where to send the browser when there is no authorize request to finish
+      # (direct visit, dead session). Per-client override wins.
+      IDP_START_URL: "http://localhost/login"
+      # Optional per-client branding/recovery, keyed by client_id.
+      # Unknown client_ids still work - they just get the defaults above.
+      IDP_CLIENTS: >-
+        {"daravelocal":{"name":"Digital Hub","brand_name":"Digital Hub","start_url":"http://localhost/login"}}
     ports:
       - "8081:8080"
     depends_on:

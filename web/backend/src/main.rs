@@ -2,6 +2,7 @@ use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{middleware::Logger, web, App, HttpRequest, HttpResponse, HttpServer};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::env;
 
 /// Proxy the Authentik flow executor so the SPA can render the challenges
@@ -21,10 +22,12 @@ async fn flow_executor(req: HttpRequest, body: web::Bytes) -> HttpResponse {
 
     log::info!("flow_executor slug={flow_slug:?} raw_path={}", req.path());
 
-    // Only these two slugs are meant to be driven by the SPA.
-    if flow_slug != "dh-login" && flow_slug != "dh-consent" {
+    // Flows exposed to the custom UI. The list is configuration, not code, so a
+    // second provider can use its own flow (dh-login-mfa, dh-consent-strict, ...)
+    // without a rebuild. Defaults keep the single-provider setup working.
+    if !allowed_flows().iter().any(|f| f == &flow_slug) {
         return HttpResponse::BadRequest().json(serde_json::json!({
-            "detail": format!("flow '{}' is not exposed to the custom UI", flow_slug),
+            "detail": format!("flow '{flow_slug}' is not exposed to the custom UI"),
         }));
     }
 
@@ -181,6 +184,69 @@ fn authentik_base() -> String {
     env::var("AUTHENTIK_URL").unwrap_or_else(|_| "http://server:9000".to_string())
 }
 
+/// Flow slugs the SPA is allowed to drive, lower-cased.
+///
+/// Configuration, not code: a second provider may point at a different flow
+/// (`dh-login-mfa`, `dh-consent-strict`, ...) and adding it must not require a
+/// rebuild. Empty entries are dropped so a trailing comma in the env var is
+/// harmless.
+fn allowed_flows() -> Vec<String> {
+    static CACHE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let raw = env::var("ALLOWED_FLOWS").unwrap_or_else(|_| "dh-login,dh-consent".into());
+            raw.split(',')
+                .map(|s| s.trim().trim_end_matches('/').to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .clone()
+}
+
+/// Login flow used when the authorize redirect names none.
+fn default_login_flow() -> String {
+    env::var("DEFAULT_LOGIN_FLOW").unwrap_or_else(|_| "dh-login".into())
+}
+
+/// Consent flow used when the authorize redirect names none.
+fn default_consent_flow() -> String {
+    env::var("DEFAULT_CONSENT_FLOW").unwrap_or_else(|_| "dh-consent".into())
+}
+
+/// Generic page to send the browser to when there is no authorize request to
+/// complete. Configurable because with several client apps there is no single
+/// "home" page anymore - this is only the last-resort recovery target.
+fn start_url() -> String {
+    env::var("IDP_START_URL").unwrap_or_else(|_| "/".into())
+}
+
+/// Per-client overrides, keyed by `client_id`.
+///
+/// One JSON env var so the registry can grow without a rebuild, e.g.
+///   IDP_CLIENTS='{"abc":{"name":"Next Portal","start_url":"http://localhost:3000/login"}}'
+/// Unknown clients fall back to the global defaults, so registering a client is
+/// optional - only needed when it wants its own branding or recovery page.
+fn client_overrides() -> serde_json::Value {
+    static CACHE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| match env::var("IDP_CLIENTS") {
+            Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
+                log::warn!("IDP_CLIENTS is not valid JSON, ignoring: {e}");
+                serde_json::json!({})
+            }),
+            Err(_) => serde_json::json!({}),
+        })
+        .clone()
+}
+
+/// One client's overrides, always an object (empty when unregistered).
+fn client_settings(client_id: &str) -> serde_json::Value {
+    client_overrides()
+        .get(client_id)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
 /// Pull one cookie's value out of a raw `Cookie:` header.
 fn read_cookie(header: &str, name: &str) -> Option<String> {
     for part in header.split(';') {
@@ -226,13 +292,49 @@ async fn health() -> HttpResponse {
     })
 }
 
-async fn config() -> HttpResponse {
+/// Everything the SPA needs to render the right screens, resolved for one
+/// client.
+///
+/// `client_id` is optional: the SPA passes it when it has one, and without it
+/// the global defaults come back. Per-client values override the global ones, so
+/// one IdP can front many apps with different branding and recovery pages.
+async fn config(req: HttpRequest) -> HttpResponse {
+    let client_id = web::Query::<HashMap<String, String>>::from_query(req.query_string())
+        .ok()
+        .and_then(|q| q.get("client_id").cloned())
+        .unwrap_or_default();
+
+    let overrides = client_settings(&client_id);
+
+    // A per-client string wins; otherwise the global default stands.
+    let pick = |key: &str, fallback: String| -> String {
+        overrides
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or(fallback)
+    };
+    let text = |key: &str| -> String {
+        overrides
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
     HttpResponse::Ok().json(serde_json::json!({
+        "client_id": client_id,
         // Browser-facing base URL for the IdP.
-        "authentik_url": env::var("AUTHENTIK_PUBLIC_URL")
-            .unwrap_or_else(|_| "http://localhost:9001".into()),
-        "login_flow": "dh-login",
-        "consent_flow": "dh-consent",
+        "authentik_url": authentik_origin(),
+        "login_flow": pick("login_flow", default_login_flow()),
+        "consent_flow": pick("consent_flow", default_consent_flow()),
+        // Where to send the browser when there is nothing to authorize.
+        "start_url": pick("start_url", start_url()),
+        // Branding; the shell falls back to its own defaults when absent.
+        "brand_name": pick("brand_name", "Digital Hub".into()),
+        "brand_subtitle": text("brand_subtitle"),
+        // Human name of the requesting app, shown on the consent screen.
+        "client_name": text("name"),
     }))
 }
 

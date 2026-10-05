@@ -14,6 +14,8 @@ import { runFlow } from '../api'
 const props = defineProps({
   flowSlug: { type: String, default: 'dh-login' },
   query: { type: String, default: '' },
+  brandName: { type: String, default: 'Digital Hub' },
+  clientName: { type: String, default: '' },
 })
 
 const emit = defineEmits(['done'])
@@ -100,7 +102,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <AuthShell subtitle="Masuk untuk melanjutkan">
+  <AuthShell
+    subtitle="Masuk untuk melanjutkan"
+    :brand-name="props.brandName"
+    :client-name="props.clientName"
+  >
     <div v-if="loading" class="py-8 text-center text-sm text-slate-500">Memuat…</div>
 
     <div v-else-if="pageError" class="rounded-lg border border-rose-200 bg-rose-50 p-4">
